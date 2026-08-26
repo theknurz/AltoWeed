@@ -1,0 +1,11 @@
+## Interface: 30300
+## Title: AltoWeed
+## Notes: Remembers bag, bank, currency, and Personal Storage contents for every character you've logged into.
+## Author: Oathmeal-Rexxar
+## Version: 1.0
+## X-License: BSD-2-Clause
+## SavedVariables: AltoWeedDB
+
+Core.lua
+Minimap.lua
+UI.lua
