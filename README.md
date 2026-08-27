@@ -10,6 +10,7 @@ Log into an alt, and AltoWeed quietly records what it sees. Log into a different
 - **Persists across characters** — data is stored account-wide, so every character you've ever logged into stays browsable, not just your current one.
 - **Minimap button** — left-click to open the AltoWeed window.
 - **Character list** — a sortable, class-colored list of every character you've visited, most recent first. Click one to see its stored inventory.
+- **Search** — type an item (or currency) name into the search field and press Enter or click the magnifying glass to highlight every matching item currently on screen.
 - **Delete** — remove a character (and everything recorded about them) from the list, with a confirmation prompt.
 - **Close** — click the X or just press Escape.
 
@@ -27,6 +28,7 @@ then `/reload` or restart the client.
 
 - Click the minimap button (bag icon) to open the window.
 - Click a character on the left to view their bags, bank, currency, and Personal Storage on the right.
+- Type into the search field and press **Enter** (or click the magnifying glass) to highlight matching items with a gold glow. Clear the field and search again to remove the highlight.
 - Click **Delete** to forget a character.
 - Press **Escape** or click the **X** to close the window.
 

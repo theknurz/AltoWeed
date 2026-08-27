@@ -9,6 +9,20 @@ local BOTTOM_HEIGHT = 30
 local GUTTER = 10
 local ITEM_SIZE = 36
 local ITEM_PADDING = 6
+local SEARCH_HEIGHT = 22
+local SEARCH_ROW_HEIGHT = SEARCH_HEIGHT + GUTTER
+
+-- Pulls the item name out of an item link, e.g.
+-- "|cffffffff|Hitem:12345::::::::80:::::|h[Foo Bar]|h|r" -> "Foo Bar"
+local function ItemNameFromLink(link)
+    if not link then return nil end
+    return link:match("%[(.-)%]")
+end
+
+local function MatchesSearch(name, query)
+    if not query or not name then return false end
+    return string.find(name:lower(), query, 1, true) ~= nil
+end
 
 StaticPopupDialogs["ALTOWEED_DELETE_CHAR"] = {
     text = "Delete recorded items for %s?",
@@ -198,6 +212,17 @@ function AltoWeedUI:GetItemButton(i)
     count:SetPoint("BOTTOMRIGHT", -2, 2)
     btn.count = count
 
+    -- Shown when this item matches the current search; drawn above the
+    -- quality border so a match is unmistakable even on a colored item.
+    local searchHighlight = btn:CreateTexture(nil, "OVERLAY", nil, 1)
+    searchHighlight:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+    searchHighlight:SetBlendMode("ADD")
+    searchHighlight:SetVertexColor(1, 0.9, 0.1)
+    searchHighlight:SetPoint("CENTER")
+    searchHighlight:SetSize(ITEM_SIZE * 1.8, ITEM_SIZE * 1.8)
+    searchHighlight:Hide()
+    btn.searchHighlight = searchHighlight
+
     btn:SetScript("OnEnter", function(self)
         if self.link then
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -229,6 +254,7 @@ function AltoWeedUI:LayoutItems(items, index, y, perRow)
     if #items == 0 then
         return index, y
     end
+    local query = self.searchQuery
     local col = 0
     for _, item in ipairs(items) do
         local btn = self:GetItemButton(index)
@@ -244,6 +270,11 @@ function AltoWeedUI:LayoutItems(items, index, y, perRow)
             btn.border:Show()
         else
             btn.border:Hide()
+        end
+        if query and MatchesSearch(ItemNameFromLink(item.link), query) then
+            btn.searchHighlight:Show()
+        else
+            btn.searchHighlight:Hide()
         end
         btn:Show()
 
@@ -265,6 +296,7 @@ function AltoWeedUI:LayoutCurrency(items, index, y, perRow)
     if #items == 0 then
         return index, y
     end
+    local query = self.searchQuery
     local col = 0
     for _, item in ipairs(items) do
         local btn = self:GetItemButton(index)
@@ -277,6 +309,11 @@ function AltoWeedUI:LayoutCurrency(items, index, y, perRow)
         btn.currencyCount = item.count
         btn.count:SetText(item.count or 0)
         btn.border:Hide()
+        if query and MatchesSearch(item.name, query) then
+            btn.searchHighlight:Show()
+        else
+            btn.searchHighlight:Hide()
+        end
         btn:Show()
 
         index = index + 1
@@ -292,6 +329,15 @@ function AltoWeedUI:LayoutCurrency(items, index, y, perRow)
     return index, y
 end
 
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- Search
+
+function AltoWeedUI:RunSearch(text)
+    text = strtrim(text or "")
+    self.searchQuery = (text ~= "") and text:lower() or nil
+    self:RefreshItems()
+end
+
 function AltoWeedUI:RefreshItems()
     local char = self.selectedKey and AltoWeedDB.characters[self.selectedKey]
 
@@ -300,6 +346,7 @@ function AltoWeedUI:RefreshItems()
         btn.link = nil
         btn.currencyName = nil
         btn.currencyCount = nil
+        btn.searchHighlight:Hide()
     end
     for _, fs in ipairs(self.chestTabHeaders) do
         fs:Hide()
@@ -425,11 +472,37 @@ function AltoWeedUI:CreateFrame()
     divider:SetPoint("TOPLEFT", charScroll, "TOPRIGHT", GUTTER, 0)
     divider:SetPoint("BOTTOMLEFT", deleteBtn, "BOTTOMRIGHT", GUTTER, 0)
 
-    -- Right: item grid (bags, then bank)
+    -- Right: search bar, then item grid (currency, bags, bank, chest)
     local itemAreaWidth = WINDOW_WIDTH - LEFT_WIDTH - GUTTER * 4
-    local itemAreaHeight = WINDOW_HEIGHT - TITLE_HEIGHT - GUTTER * 2
+
+    local searchBtn = CreateFrame("Button", "AltoWeedSearchButton", frame)
+    searchBtn:SetSize(SEARCH_HEIGHT, SEARCH_HEIGHT)
+    searchBtn:SetPoint("TOPRIGHT", divider, "TOPRIGHT", GUTTER + itemAreaWidth, -4)
+    local searchIcon = searchBtn:CreateTexture(nil, "ARTWORK")
+    searchIcon:SetAllPoints()
+    searchIcon:SetTexture("Interface\\Icons\\INV_Misc_Spyglass_03")
+    searchBtn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    searchBtn:SetScript("OnClick", function()
+        AltoWeedUI:RunSearch(AltoWeedUI.searchBox:GetText())
+    end)
+    self.searchButton = searchBtn
+
+    local searchBox = CreateFrame("EditBox", "AltoWeedSearchBox", frame, "InputBoxTemplate")
+    searchBox:SetHeight(SEARCH_HEIGHT)
+    searchBox:SetWidth(itemAreaWidth - SEARCH_HEIGHT - 14)
+    searchBox:SetPoint("TOPLEFT", divider, "TOPRIGHT", GUTTER + 6, -4)
+    searchBox:SetAutoFocus(false)
+    searchBox:SetTextInsets(4, 4, 0, 0)
+    searchBox:SetScript("OnEnterPressed", function(self)
+        AltoWeedUI:RunSearch(self:GetText())
+        self:ClearFocus()
+    end)
+    searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    self.searchBox = searchBox
+
+    local itemAreaHeight = WINDOW_HEIGHT - TITLE_HEIGHT - GUTTER * 2 - SEARCH_ROW_HEIGHT
     local itemScroll, itemContent, itemSlider = CreateScrollArea(frame, "AltoWeedItemScroll", itemAreaWidth, itemAreaHeight)
-    itemScroll:SetPoint("TOPLEFT", divider, "TOPRIGHT", GUTTER, 0)
+    itemScroll:SetPoint("TOPLEFT", divider, "TOPRIGHT", GUTTER, -SEARCH_ROW_HEIGHT)
     self.itemScroll = itemScroll
     self.itemContent = itemContent
     self.itemSlider = itemSlider
@@ -456,6 +529,7 @@ function AltoWeedUI:CreateFrame()
     self.charButtons = {}
     self.itemButtons = {}
     self.chestTabHeaders = {}
+    self.searchQuery = nil
 end
 
 function AltoWeedUI:Toggle()
