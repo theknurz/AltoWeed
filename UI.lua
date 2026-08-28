@@ -11,6 +11,8 @@ local ITEM_SIZE = 36
 local ITEM_PADDING = 6
 local SEARCH_HEIGHT = 22
 local SEARCH_ROW_HEIGHT = SEARCH_HEIGHT + GUTTER
+local TAB_HEIGHT = 20
+local TAB_ROW_HEIGHT = TAB_HEIGHT + GUTTER
 
 -- Pulls the item name out of an item link, e.g.
 -- "|cffffffff|Hitem:12345::::::::80:::::|h[Foo Bar]|h|r" -> "Foo Bar"
@@ -80,6 +82,37 @@ local function CreateScrollArea(parent, name, totalWidth, height)
     end)
 
     return scroll, content, slider
+end
+
+-- A small self-styled toggle button, used for the two top-level tabs.
+local function CreateTabButton(parent, text)
+    local btn = CreateFrame("Button", nil, parent)
+    btn:SetHeight(TAB_HEIGHT)
+
+    local bg = btn:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetTexture(1, 1, 1, 0.12)
+    btn.bg = bg
+
+    local hover = btn:CreateTexture(nil, "HIGHLIGHT")
+    hover:SetAllPoints()
+    hover:SetTexture(1, 1, 1, 0.1)
+
+    local label = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    label:SetPoint("CENTER")
+    label:SetText(text)
+    btn.label = label
+    btn:SetWidth(label:GetStringWidth() + 24)
+
+    return btn
+end
+
+local function SetTabActive(btn, active)
+    if active then
+        btn.bg:SetTexture(0.3, 0.5, 0.9, 0.5)
+    else
+        btn.bg:SetTexture(1, 1, 1, 0.12)
+    end
 end
 
 local function FormatMoney(copper)
@@ -233,9 +266,21 @@ function AltoWeedUI:GetItemButton(i)
             GameTooltip:AddLine(self.currencyName)
             GameTooltip:AddLine(tostring(self.currencyCount or 0), 1, 1, 1)
             GameTooltip:Show()
+        elseif self.recipeName then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(self.recipeName)
+            GameTooltip:Show()
         end
     end)
     btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    -- Shift-click (or the user's chat-link modifier) inserts the item link
+    -- into chat, same as any other item icon in the default UI.
+    btn:SetScript("OnClick", function(self)
+        if self.link and IsModifiedClick("CHATLINK") then
+            HandleModifiedItemClick(self.link)
+        end
+    end)
 
     self.itemButtons[i] = btn
     return btn
@@ -246,6 +291,16 @@ function AltoWeedUI:GetChestTabHeader(i)
     if fs then return fs end
     fs = self.itemContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     self.chestTabHeaders[i] = fs
+    return fs
+end
+
+-- Pooled FontStrings for the Professions tab: profession name/rank lines and
+-- recipe category sub-headers both just need a positioned, styleable label.
+function AltoWeedUI:GetProfHeader(i)
+    local fs = self.profHeaders[i]
+    if fs then return fs end
+    fs = self.itemContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    self.profHeaders[i] = fs
     return fs
 end
 
@@ -329,6 +384,49 @@ function AltoWeedUI:LayoutCurrency(items, index, y, perRow)
     return index, y
 end
 
+function AltoWeedUI:LayoutRecipes(recipes, index, y, perRow)
+    recipes = recipes or {}
+    if #recipes == 0 then
+        return index, y
+    end
+    local query = self.searchQuery
+    local col = 0
+    for _, recipe in ipairs(recipes) do
+        local btn = self:GetItemButton(index)
+        btn:ClearAllPoints()
+        btn:SetPoint("TOPLEFT", self.itemContent, "TOPLEFT",
+            2 + col * (ITEM_SIZE + ITEM_PADDING), -y)
+        btn.icon:SetTexture(recipe.icon)
+        btn.link = recipe.link
+        btn.recipeName = recipe.name
+        btn.count:SetText("")
+        local dc = recipe.difficulty and AltoWeed.TRADESKILL_DIFFICULTY_COLORS[recipe.difficulty]
+        if dc then
+            btn.border:SetVertexColor(dc.r, dc.g, dc.b)
+            btn.border:Show()
+        else
+            btn.border:Hide()
+        end
+        if query and (MatchesSearch(recipe.name, query) or MatchesSearch(ItemNameFromLink(recipe.link), query)) then
+            btn.searchHighlight:Show()
+        else
+            btn.searchHighlight:Hide()
+        end
+        btn:Show()
+
+        index = index + 1
+        col = col + 1
+        if col >= perRow then
+            col = 0
+            y = y + ITEM_SIZE + ITEM_PADDING
+        end
+    end
+    if col > 0 then
+        y = y + ITEM_SIZE + ITEM_PADDING
+    end
+    return index, y
+end
+
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 -- Search
 
@@ -346,23 +444,35 @@ function AltoWeedUI:RefreshItems()
         btn.link = nil
         btn.currencyName = nil
         btn.currencyCount = nil
+        btn.recipeName = nil
         btn.searchHighlight:Hide()
     end
     for _, fs in ipairs(self.chestTabHeaders) do
         fs:Hide()
     end
+    for _, fs in ipairs(self.profHeaders) do
+        fs:Hide()
+    end
+    self.bagsHeader:Hide()
+    self.bankHeader:Hide()
+    self.currencyHeader:Hide()
+    self.moneyText:Hide()
+    self.chestHeader:Hide()
 
     if not char then
-        self.bagsHeader:Hide()
-        self.bankHeader:Hide()
-        self.currencyHeader:Hide()
-        self.moneyText:Hide()
-        self.chestHeader:Hide()
         self.itemContent:SetHeight(self.itemScroll:GetHeight())
         UpdateScrollRange(self.itemScroll, self.itemContent, self.itemSlider)
         return
     end
 
+    if self.activeTab == "professions" then
+        self:LayoutProfessionTab(char)
+    else
+        self:LayoutStashTab(char)
+    end
+end
+
+function AltoWeedUI:LayoutStashTab(char)
     local perRow = math.max(1, math.floor(self.itemContent:GetWidth() / (ITEM_SIZE + ITEM_PADDING)))
     local index, y = 1, 0
 
@@ -421,6 +531,88 @@ function AltoWeedUI:RefreshItems()
     UpdateScrollRange(self.itemScroll, self.itemContent, self.itemSlider)
 end
 
+function AltoWeedUI:LayoutProfessionTab(char)
+    local perRow = math.max(1, math.floor(self.itemContent:GetWidth() / (ITEM_SIZE + ITEM_PADDING)))
+    local index, y = 1, 0
+    local headerIdx = 0
+
+    local names = {}
+    for name in pairs(char.professions or {}) do
+        names[#names + 1] = name
+    end
+    table.sort(names)
+
+    if #names == 0 then
+        headerIdx = headerIdx + 1
+        local fs = self:GetProfHeader(headerIdx)
+        fs:SetFontObject("GameFontHighlightSmall")
+        fs:SetText("No professions recorded yet for this character.")
+        fs:Show()
+        fs:ClearAllPoints()
+        fs:SetPoint("TOPLEFT", self.itemContent, "TOPLEFT", 2, -y)
+        y = y + 18
+    end
+
+    for _, name in ipairs(names) do
+        local prof = char.professions[name]
+
+        headerIdx = headerIdx + 1
+        local title = self:GetProfHeader(headerIdx)
+        title:SetFontObject("GameFontNormal")
+        title:SetText(string.format("%s  (%d / %d)", prof.name or name, prof.rank or 0, prof.maxRank or 0))
+        title:Show()
+        title:ClearAllPoints()
+        title:SetPoint("TOPLEFT", self.itemContent, "TOPLEFT", 2, -y)
+        y = y + 18
+
+        if prof.recipes and #prof.recipes > 0 then
+            -- Group consecutive recipes by their category header (as seen in
+            -- the trade skill window) so each group can still be laid out as
+            -- one packed grid, same approach as the chest's per-tab items.
+            local groups = {}
+            local currentCategory = false
+            local currentGroup = nil
+            for _, recipe in ipairs(prof.recipes) do
+                if recipe.category ~= currentCategory then
+                    currentCategory = recipe.category
+                    currentGroup = { category = currentCategory, items = {} }
+                    groups[#groups + 1] = currentGroup
+                end
+                currentGroup.items[#currentGroup.items + 1] = recipe
+            end
+
+            for _, group in ipairs(groups) do
+                if group.category then
+                    headerIdx = headerIdx + 1
+                    local catFs = self:GetProfHeader(headerIdx)
+                    catFs:SetFontObject("GameFontNormalSmall")
+                    catFs:SetText(group.category)
+                    catFs:Show()
+                    catFs:ClearAllPoints()
+                    catFs:SetPoint("TOPLEFT", self.itemContent, "TOPLEFT", 10, -y)
+                    y = y + 16
+                end
+                index, y = self:LayoutRecipes(group.items, index, y, perRow)
+                y = y + 6
+            end
+        else
+            headerIdx = headerIdx + 1
+            local fs = self:GetProfHeader(headerIdx)
+            fs:SetFontObject("GameFontHighlightSmall")
+            fs:SetText("No recipes recorded for this profession yet - open its trade skill window while logged into this character.")
+            fs:Show()
+            fs:ClearAllPoints()
+            fs:SetPoint("TOPLEFT", self.itemContent, "TOPLEFT", 10, -y)
+            y = y + 18
+        end
+
+        y = y + 10
+    end
+
+    self.itemContent:SetHeight(math.max(y, self.itemScroll:GetHeight()))
+    UpdateScrollRange(self.itemScroll, self.itemContent, self.itemSlider)
+end
+
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 -- Frame construction
 
@@ -472,12 +664,24 @@ function AltoWeedUI:CreateFrame()
     divider:SetPoint("TOPLEFT", charScroll, "TOPRIGHT", GUTTER, 0)
     divider:SetPoint("BOTTOMLEFT", deleteBtn, "BOTTOMRIGHT", GUTTER, 0)
 
-    -- Right: search bar, then item grid (currency, bags, bank, chest)
+    -- Right: tabs, then search bar, then item grid
     local itemAreaWidth = WINDOW_WIDTH - LEFT_WIDTH - GUTTER * 4
+
+    local stashTab = CreateTabButton(frame, "Personal Stash")
+    stashTab:SetPoint("TOPLEFT", divider, "TOPRIGHT", GUTTER, 0)
+    stashTab:SetScript("OnClick", function() AltoWeedUI:SetActiveTab("stash") end)
+    self.stashTab = stashTab
+
+    local professionsTab = CreateTabButton(frame, "Professions")
+    professionsTab:SetPoint("LEFT", stashTab, "RIGHT", 4, 0)
+    professionsTab:SetScript("OnClick", function() AltoWeedUI:SetActiveTab("professions") end)
+    self.professionsTab = professionsTab
+    SetTabActive(stashTab, true)
+    SetTabActive(professionsTab, false)
 
     local searchBtn = CreateFrame("Button", "AltoWeedSearchButton", frame)
     searchBtn:SetSize(SEARCH_HEIGHT, SEARCH_HEIGHT)
-    searchBtn:SetPoint("TOPRIGHT", divider, "TOPRIGHT", GUTTER + itemAreaWidth, -4)
+    searchBtn:SetPoint("TOPRIGHT", divider, "TOPRIGHT", GUTTER + itemAreaWidth, -(TAB_ROW_HEIGHT + 4))
     local searchIcon = searchBtn:CreateTexture(nil, "ARTWORK")
     searchIcon:SetAllPoints()
     searchIcon:SetTexture("Interface\\Icons\\INV_Misc_Spyglass_03")
@@ -490,7 +694,7 @@ function AltoWeedUI:CreateFrame()
     local searchBox = CreateFrame("EditBox", "AltoWeedSearchBox", frame, "InputBoxTemplate")
     searchBox:SetHeight(SEARCH_HEIGHT)
     searchBox:SetWidth(itemAreaWidth - SEARCH_HEIGHT - 14)
-    searchBox:SetPoint("TOPLEFT", divider, "TOPRIGHT", GUTTER + 6, -4)
+    searchBox:SetPoint("TOPLEFT", divider, "TOPRIGHT", GUTTER + 6, -(TAB_ROW_HEIGHT + 4))
     searchBox:SetAutoFocus(false)
     searchBox:SetTextInsets(4, 4, 0, 0)
     searchBox:SetScript("OnEnterPressed", function(self)
@@ -500,9 +704,9 @@ function AltoWeedUI:CreateFrame()
     searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     self.searchBox = searchBox
 
-    local itemAreaHeight = WINDOW_HEIGHT - TITLE_HEIGHT - GUTTER * 2 - SEARCH_ROW_HEIGHT
+    local itemAreaHeight = WINDOW_HEIGHT - TITLE_HEIGHT - GUTTER * 2 - SEARCH_ROW_HEIGHT - TAB_ROW_HEIGHT
     local itemScroll, itemContent, itemSlider = CreateScrollArea(frame, "AltoWeedItemScroll", itemAreaWidth, itemAreaHeight)
-    itemScroll:SetPoint("TOPLEFT", divider, "TOPRIGHT", GUTTER, -SEARCH_ROW_HEIGHT)
+    itemScroll:SetPoint("TOPLEFT", divider, "TOPRIGHT", GUTTER, -(SEARCH_ROW_HEIGHT + TAB_ROW_HEIGHT))
     self.itemScroll = itemScroll
     self.itemContent = itemContent
     self.itemSlider = itemSlider
@@ -529,7 +733,16 @@ function AltoWeedUI:CreateFrame()
     self.charButtons = {}
     self.itemButtons = {}
     self.chestTabHeaders = {}
+    self.profHeaders = {}
     self.searchQuery = nil
+    self.activeTab = "stash"
+end
+
+function AltoWeedUI:SetActiveTab(tab)
+    self.activeTab = tab
+    SetTabActive(self.stashTab, tab == "stash")
+    SetTabActive(self.professionsTab, tab == "professions")
+    self:RefreshItems()
 end
 
 function AltoWeedUI:Toggle()

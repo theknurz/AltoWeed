@@ -1,8 +1,8 @@
 ## Interface: 30300
 ## Title: AltoWeed
-## Notes: Remembers bag, bank, currency, and Personal Storage contents for every character you've logged into. Search to highlight matching items.
+## Notes: Remembers bag, bank, currency, Personal Storage, and profession/recipe data for every character you've logged into. Search to highlight matches.
 ## Author: Oathmeal-Rexxar
-## Version: 1.1
+## Version: 1.2
 ## X-License: BSD-2-Clause
 ## SavedVariables: AltoWeedDB
 

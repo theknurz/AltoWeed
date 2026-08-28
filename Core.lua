@@ -4,6 +4,7 @@ AltoWeed = {}
 local AltoWeed = AltoWeed
 AltoWeed.bankOpen = false
 AltoWeed.chestOpen = false
+AltoWeed.tradeSkillOpen = false
 
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 -- Saved variables
@@ -173,6 +174,170 @@ function AltoWeed:ScanChest()
     self:RefreshUIIfShowing(key)
 end
 
+-- Recognized WotLK profession/secondary-skill names. Used to pick professions
+-- out of the generic Skills list (see ScanSkillLines below) without relying
+-- on that list's category headers, which may not match a custom client.
+local KNOWN_PROFESSIONS = {
+    ["Alchemy"] = true, ["Blacksmithing"] = true, ["Enchanting"] = true,
+    ["Engineering"] = true, ["Herbalism"] = true, ["Inscription"] = true,
+    ["Jewelcrafting"] = true, ["Leatherworking"] = true, ["Mining"] = true,
+    ["Skinning"] = true, ["Tailoring"] = true,
+    ["Cooking"] = true, ["First Aid"] = true, ["Fishing"] = true,
+}
+
+-- The generic Skills list (GetNumSkillLines/GetSkillLineInfo - the same data
+-- that backs the Skills tab in the default spellbook) has rank/max rank for
+-- every profession, including pure-gathering ones like Herbalism, Mining, and
+-- Skinning that never open a trade skill window and so are otherwise
+-- invisible to ScanTradeSkill(). No window needs to be open for this.
+--
+-- Its headers can be collapsed, same quirk as the currency tab - expand
+-- everything first, read, then restore the original collapse state.
+local function ScanSkillLines()
+    if not (GetNumSkillLines and GetSkillLineInfo) then return nil end
+
+    local collapsedNames = {}
+    if ExpandSkillHeader then
+        for i = 1, GetNumSkillLines() do
+            local name, isHeader, isExpanded = GetSkillLineInfo(i)
+            if isHeader and not isExpanded then
+                collapsedNames[name] = true
+            end
+        end
+
+        local i = 1
+        while i <= GetNumSkillLines() do
+            local name, isHeader, isExpanded = GetSkillLineInfo(i)
+            if isHeader and not isExpanded then
+                ExpandSkillHeader(i)
+            else
+                i = i + 1
+            end
+        end
+    end
+
+    local results = {}
+    for i = 1, GetNumSkillLines() do
+        local name, isHeader, isExpanded, rank, _, _, maxRank = GetSkillLineInfo(i)
+        if not isHeader and KNOWN_PROFESSIONS[name] then
+            results[name] = { rank = rank, maxRank = maxRank }
+        end
+    end
+
+    if ExpandSkillHeader then
+        for i = GetNumSkillLines(), 1, -1 do
+            local name, isHeader, isExpanded = GetSkillLineInfo(i)
+            if isHeader and isExpanded and collapsedNames[name] then
+                ExpandSkillHeader(i)
+            end
+        end
+    end
+
+    return results
+end
+
+-- Profession summary (rank/max rank per profession). Tries the Skills list
+-- first (works for every profession, no window needed), then layers on
+-- GetProfessions()/GetProfessionInfo() where available (also gives an icon).
+-- Some private-server clients (e.g. Ascension, which adds classes like Monk
+-- that don't exist in real 3.3.5a) don't expose GetProfessions() at all, so
+-- that part is best-effort and simply skipped if missing.
+function AltoWeed:ScanProfessions()
+    local key = self:GetCharacterKey()
+    local char = AltoWeedDB.characters[key]
+    if not char then return end
+    char.professions = char.professions or {}
+
+    local skillResults = ScanSkillLines()
+    if skillResults then
+        for name, info in pairs(skillResults) do
+            local prof = char.professions[name] or {}
+            prof.name = name
+            prof.rank = info.rank
+            prof.maxRank = info.maxRank
+            char.professions[name] = prof
+        end
+    end
+
+    if GetProfessions and GetProfessionInfo then
+        local numSlots = select("#", GetProfessions())
+        local slots = { GetProfessions() }
+        for i = 1, numSlots do
+            local slotIndex = slots[i]
+            if slotIndex then
+                local name, icon, rank, maxRank = GetProfessionInfo(slotIndex)
+                if name and name ~= "" then
+                    local prof = char.professions[name] or {}
+                    prof.name = name
+                    prof.icon = icon
+                    prof.rank = rank
+                    prof.maxRank = maxRank
+                    char.professions[name] = prof
+                end
+            end
+        end
+    end
+
+    char.lastVisit = time()
+
+    self:RefreshUIIfShowing(key)
+end
+
+-- Difficulty color for a recipe row, keyed by the strings GetTradeSkillInfo()
+-- returns for recipe difficulty ("optimal"/"medium"/"easy"/"trivial"). Kept
+-- local rather than relying on a Blizzard global of the same purpose.
+local TRADESKILL_DIFFICULTY_COLORS = {
+    optimal = { r = 1.00, g = 0.50, b = 0.00 },
+    medium  = { r = 1.00, g = 1.00, b = 0.00 },
+    easy    = { r = 0.25, g = 0.75, b = 0.25 },
+    trivial = { r = 0.60, g = 0.60, b = 0.60 },
+}
+AltoWeed.TRADESKILL_DIFFICULTY_COLORS = TRADESKILL_DIFFICULTY_COLORS
+
+-- Recipes known for a profession only show up in GetTradeSkillInfo() while
+-- that profession's trade skill window is actually open, same "only while
+-- open" quirk as the bank and chest. Enchanting shares this same API in this
+-- client version (the older separate Craft API was folded into it before
+-- Wrath), so no special-casing is needed there.
+function AltoWeed:ScanTradeSkill()
+    if not (GetTradeSkillLine and GetNumTradeSkills and GetTradeSkillInfo) then return end
+
+    local key = self:GetCharacterKey()
+    local char = AltoWeedDB.characters[key]
+    if not char then return end
+
+    local skillName, currentLevel, maxLevel = GetTradeSkillLine()
+    if not skillName or skillName == "" or skillName == "UNKNOWN" then return end
+
+    char.professions = char.professions or {}
+    local prof = char.professions[skillName] or {}
+    prof.name = skillName
+    prof.rank = currentLevel
+    prof.maxRank = maxLevel
+
+    local recipes = {}
+    local category = nil
+    for i = 1, GetNumTradeSkills() do
+        local name, skillType = GetTradeSkillInfo(i)
+        if skillType == "header" or skillType == "subheader" then
+            category = name
+        elseif name then
+            recipes[#recipes + 1] = {
+                name = name,
+                link = GetTradeSkillItemLink and GetTradeSkillItemLink(i) or nil,
+                icon = GetTradeSkillIcon and GetTradeSkillIcon(i) or nil,
+                difficulty = skillType,
+                category = category,
+            }
+        end
+    end
+    prof.recipes = recipes
+    char.professions[skillName] = prof
+    char.lastVisit = time()
+
+    self:RefreshUIIfShowing(key)
+end
+
 -- Only refreshes the parts of the window that need it, and only if it's open.
 function AltoWeed:RefreshUIIfShowing(key)
     if not (AltoWeedFrame and AltoWeedFrame:IsShown()) then return end
@@ -189,7 +354,7 @@ function AltoWeed:UpdateCharacterMeta()
     local key = self:GetCharacterKey()
     local char = AltoWeedDB.characters[key]
     if not char then
-        char = { bags = {}, bank = {}, currency = {}, money = 0, chest = {} }
+        char = { bags = {}, bank = {}, currency = {}, money = 0, chest = {}, professions = {} }
         AltoWeedDB.characters[key] = char
     end
     char.name = UnitName("player")
@@ -212,6 +377,7 @@ end
 -- every single event.
 
 local pendingBagScan, pendingBankScan, pendingCurrencyScan, pendingChestScan = false, false, false, false
+local pendingProfessionScan, pendingTradeSkillScan = false, false
 local elapsedSince = 0
 local throttleFrame = CreateFrame("Frame")
 throttleFrame:Hide()
@@ -236,6 +402,14 @@ throttleFrame:SetScript("OnUpdate", function(self, elapsed)
         pendingChestScan = false
         AltoWeed:ScanChest()
     end
+    if pendingProfessionScan then
+        pendingProfessionScan = false
+        AltoWeed:ScanProfessions()
+    end
+    if pendingTradeSkillScan then
+        pendingTradeSkillScan = false
+        AltoWeed:ScanTradeSkill()
+    end
 end)
 
 local function RequestBagScan()
@@ -258,6 +432,16 @@ local function RequestChestScan()
     throttleFrame:Show()
 end
 
+local function RequestProfessionScan()
+    pendingProfessionScan = true
+    throttleFrame:Show()
+end
+
+local function RequestTradeSkillScan()
+    pendingTradeSkillScan = true
+    throttleFrame:Show()
+end
+
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 -- Events
 
@@ -274,6 +458,10 @@ eventFrame:RegisterEvent("GUILDBANKFRAME_OPENED")
 eventFrame:RegisterEvent("GUILDBANKFRAME_CLOSED")
 eventFrame:RegisterEvent("GUILDBANKBAGSLOTS_CHANGED")
 eventFrame:RegisterEvent("GUILDBANK_UPDATE_TABS")
+eventFrame:RegisterEvent("SKILL_LINES_CHANGED")
+eventFrame:RegisterEvent("TRADE_SKILL_SHOW")
+eventFrame:RegisterEvent("TRADE_SKILL_UPDATE")
+eventFrame:RegisterEvent("TRADE_SKILL_CLOSE")
 
 eventFrame:SetScript("OnEvent", function(self, event, arg1)
     if event == "ADDON_LOADED" then
@@ -285,6 +473,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         AltoWeed:UpdateCharacterMeta()
         AltoWeed:ScanBags()
         AltoWeed:ScanCurrency()
+        AltoWeed:ScanProfessions()
         if AltoWeedMinimap then
             AltoWeedMinimap:Create()
         end
@@ -316,5 +505,16 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
             QueryAllChestTabs()
             RequestChestScan()
         end
+    elseif event == "SKILL_LINES_CHANGED" then
+        RequestProfessionScan()
+    elseif event == "TRADE_SKILL_SHOW" then
+        AltoWeed.tradeSkillOpen = true
+        AltoWeed:ScanTradeSkill()
+    elseif event == "TRADE_SKILL_UPDATE" then
+        if AltoWeed.tradeSkillOpen then
+            RequestTradeSkillScan()
+        end
+    elseif event == "TRADE_SKILL_CLOSE" then
+        AltoWeed.tradeSkillOpen = false
     end
 end)
