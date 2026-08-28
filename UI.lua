@@ -123,6 +123,18 @@ local function FormatMoney(copper)
     return string.format("|cffffd700%dg|r |cffc7c7cf%ds|r |cffeda55f%dc|r", gold, silver, c)
 end
 
+-- Compact "1.1k" / "1.1M" style formatting for the count badge on an icon,
+-- so a large stack/currency total doesn't overflow the icon's width.
+local function FormatCount(n)
+    n = tonumber(n) or 0
+    if n >= 1000000 then
+        return (string.format("%.1fM", n / 1000000):gsub("%.0M$", "M"))
+    elseif n >= 1000 then
+        return (string.format("%.1fk", n / 1000):gsub("%.0k$", "k"))
+    end
+    return tostring(n)
+end
+
 local function UpdateScrollRange(scroll, content, slider)
     local visibleHeight = scroll:GetHeight()
     local maxScroll = math.max(0, content:GetHeight() - visibleHeight)
@@ -318,7 +330,7 @@ function AltoWeedUI:LayoutItems(items, index, y, perRow)
             2 + col * (ITEM_SIZE + ITEM_PADDING), -y)
         btn.icon:SetTexture(item.icon)
         btn.link = item.link
-        btn.count:SetText((item.count and item.count > 1) and item.count or "")
+        btn.count:SetText((item.count and item.count > 1) and FormatCount(item.count) or "")
         local qc = item.quality and ITEM_QUALITY_COLORS[item.quality]
         if qc and item.quality > 1 then
             btn.border:SetVertexColor(qc.r, qc.g, qc.b)
@@ -362,7 +374,7 @@ function AltoWeedUI:LayoutCurrency(items, index, y, perRow)
         btn.link = nil
         btn.currencyName = item.name
         btn.currencyCount = item.count
-        btn.count:SetText(item.count or 0)
+        btn.count:SetText(FormatCount(item.count or 0))
         btn.border:Hide()
         if query and MatchesSearch(item.name, query) then
             btn.searchHighlight:Show()
